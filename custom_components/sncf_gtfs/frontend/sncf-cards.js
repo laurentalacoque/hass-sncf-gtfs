@@ -26,6 +26,7 @@ class SncfRouteCard extends HTMLElement {
           ha-card {
             padding: 16px;
             border-radius: 12px;
+            cursor: pointer;
           }
           .header {
             display: flex;
@@ -71,6 +72,11 @@ class SncfRouteCard extends HTMLElement {
             display: flex;
             align-items: center;
             gap: 6px;
+          }
+          .delay-inline {
+            color: #ff9800;
+            font-size: 0.85em;
+            font-weight: 700;
           }
           .arrow {
             opacity: 0.5;
@@ -146,12 +152,20 @@ class SncfRouteCard extends HTMLElement {
           statusLabel = `+${t.delay_minutes} min`;
         }
 
+        const depDisplay = t.scheduled_departure || t.estimated_departure || "--:--";
+        const arrDisplay = t.scheduled_arrival || t.estimated_arrival || "--:--";
+        const delayInline =
+          !t.is_canceled && t.delay_minutes > 0
+            ? `<span class="delay-inline">+${t.delay_minutes} min</span>`
+            : "";
+
         html += `
           <div class="train-row ${index === 0 ? "next" : ""}">
             <div class="times">
-              <span>${t.estimated_departure || "--:--"}</span>
+              <span>${depDisplay}</span>
+              ${delayInline}
               <span class="arrow">→</span>
-              <span>${t.estimated_arrival || "--:--"}</span>
+              <span>${arrDisplay}</span>
               <span class="train-num">n°${t.train_number}</span>
             </div>
             <span class="badge ${badgeClass}">${statusLabel}</span>
@@ -166,6 +180,7 @@ class SncfRouteCard extends HTMLElement {
   getCardSize() {
     return 3;
   }
+
   static getStubConfig(hass) {
     const routeEntity = Object.keys(hass.states).find(
       (e) => e.startsWith("sensor.") && hass.states[e].attributes.trains !== undefined
@@ -175,8 +190,7 @@ class SncfRouteCard extends HTMLElement {
 }
 
 /* ==========================================================================
-   2. WIDGET POUR UN TRAIN SPÉCIFIQUE (SncfSpecificTrainSensor)
-      -> custom:sncf-specific-train-card
+   2. WIDGET POUR UN TRAIN SPÉCIFIQUE (SncfSpecificTrainSensor) -> custom:sncf-specific-train-card
    ========================================================================== */
 class SncfSpecificTrainCard extends HTMLElement {
   setConfig(config) {
@@ -241,6 +255,12 @@ class SncfSpecificTrainCard extends HTMLElement {
             font-size: 1.25em;
             font-weight: 700;
           }
+          .delay-inline {
+            color: #ff9800;
+            font-size: 0.7em;
+            font-weight: 700;
+            margin-left: 4px;
+          }
           .status-pill {
             display: inline-block;
             padding: 2px 8px;
@@ -280,6 +300,7 @@ class SncfSpecificTrainCard extends HTMLElement {
     const title = this.config.title || attrs.friendly_name || `Train ${attrs.train_number || ""}`;
     const trainNum = attrs.train_number || "";
     const depTime = attrs.estimated_departure || "--:--";
+    const schedDep = attrs.scheduled_departure || depTime;
     const isCanceled = attrs.is_canceled === true;
     const delayMin = attrs.delay_minutes || 0;
     const isInactive = stateObj.state === "Inactive / Outside window";
@@ -302,6 +323,11 @@ class SncfSpecificTrainCard extends HTMLElement {
       statusText = `Retard +${delayMin} min`;
     }
 
+    const delayInline =
+      !isInactive && !isCanceled && delayMin > 0
+        ? `<span class="delay-inline">+${delayMin} min</span>`
+        : "";
+
     this.content.innerHTML = `
       <div class="wrapper ${stateClass}">
         <div class="left">
@@ -314,7 +340,7 @@ class SncfSpecificTrainCard extends HTMLElement {
           </div>
         </div>
         <div class="right">
-          <div class="dep-time">${isInactive ? "--:--" : depTime}</div>
+          <div class="dep-time">${isInactive ? "--:--" : schedDep}${delayInline}</div>
           <span class="status-pill">${statusText}</span>
         </div>
       </div>
@@ -324,6 +350,7 @@ class SncfSpecificTrainCard extends HTMLElement {
   getCardSize() {
     return 1;
   }
+
   static getStubConfig(hass) {
     const trainEntity = Object.keys(hass.states).find(
       (e) => e.startsWith("sensor.") && hass.states[e].attributes.train_number !== undefined

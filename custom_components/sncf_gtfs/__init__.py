@@ -113,6 +113,7 @@ class SncfGtfsCoordinator(DataUpdateCoordinator):
                 dep_ts = stu.departure.time if (stu.HasField("departure") and stu.departure.time) else None
                 arr_ts = stu.arrival.time if (stu.HasField("arrival") and stu.arrival.time) else None
                 dep_delay = stu.departure.delay if stu.HasField("departure") else 0
+                arr_delay = stu.arrival.delay if stu.HasField("arrival") else dep_delay
 
                 stops.append({
                     "stop_id": stu.stop_id,
@@ -120,6 +121,7 @@ class SncfGtfsCoordinator(DataUpdateCoordinator):
                     "dep_ts": dep_ts,
                     "arr_ts": arr_ts,
                     "dep_delay": dep_delay,
+                    "arr_delay": arr_delay,
                 })
 
             trips.append({

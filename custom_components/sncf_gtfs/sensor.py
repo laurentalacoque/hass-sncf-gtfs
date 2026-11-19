@@ -94,7 +94,10 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
             else:
                 status = "On time"
 
+            
             est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
+            sched_dep_ts = (dep_ts - target_stop["dep_delay"]) if (dep_ts and target_stop) else None
+            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep
 
             # Find matching alerts
             relevant_alerts = [
@@ -109,6 +112,7 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
                 "train_number": self._train_number,
                 "trip_id": trip["trip_id"],
                 "estimated_departure": est_dep,
+                "scheduled_departure": sched_dep,
                 "delay_minutes": delay_min,
                 "is_canceled": is_canceled,
                 "alerts": relevant_alerts,
@@ -131,6 +135,7 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
             "train_number": self._train_number,
             "origin_uic": self._origin_uic or None,
             "estimated_departure": train.get("estimated_departure"),
+            "scheduled_departure": train.get("scheduled_departure"),
             "delay_minutes": train.get("delay_minutes", 0),
             "is_canceled": train.get("is_canceled", False),
             "alerts": train.get("alerts", []),
@@ -189,14 +194,22 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 status = "On time"
 
             est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
+            sched_dep_ts = (dep_ts - stop_dep["dep_delay"]) if dep_ts else None
+            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep 
+            
             arr_ts = stop_arr["arr_ts"] or stop_arr["dep_ts"]
+            arr_delay = stop_arr.get("arr_delay", stop_dep["dep_delay"])
             est_arr = datetime.fromtimestamp(arr_ts).strftime("%H:%M") if arr_ts else None
+            sched_arr_ts = (arr_ts - arr_delay) if arr_ts else None
+            sched_arr = datetime.fromtimestamp(sched_arr_ts).strftime("%H:%M") if sched_arr_ts else est_arr
 
             matched_trip_ids.add(trip["trip_id"])
             matched_trains.append({
                 "train_number": trip["train_number"],
                 "trip_id": trip["trip_id"],
                 "departure_ts": dep_ts,
+                "scheduled_departure": sched_dep,
+                "scheduled_arrival": sched_arr,
                 "estimated_departure": est_dep,
                 "estimated_arrival": est_arr,
                 "delay_minutes": delay_min,
@@ -240,6 +253,8 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             "destination_uic": self._destination_uic,
             "next_train_number": next_train.get("train_number"),
             "next_departure": next_train.get("estimated_departure"),
+            "next_scheduled_departure": next_train.get("scheduled_departure"),
+            "next_scheduled_arrival": next_train.get("scheduled_arrival"),
             "next_arrival": next_train.get("estimated_arrival"),
             "next_status": next_train.get("status"),
             "trains": trains,
