@@ -166,6 +166,12 @@ class SncfRouteCard extends HTMLElement {
   getCardSize() {
     return 3;
   }
+  static getStubConfig(hass) {
+    const routeEntity = Object.keys(hass.states).find(
+      (e) => e.startsWith("sensor.") && hass.states[e].attributes.trains !== undefined
+    );
+    return { entity: routeEntity || "" };
+  }
 }
 
 /* ==========================================================================
@@ -318,6 +324,12 @@ class SncfSpecificTrainCard extends HTMLElement {
   getCardSize() {
     return 1;
   }
+  static getStubConfig(hass) {
+    const trainEntity = Object.keys(hass.states).find(
+      (e) => e.startsWith("sensor.") && hass.states[e].attributes.train_number !== undefined
+    );
+    return { entity: trainEntity || "" };
+  }
 }
 
 customElements.define("sncf-route-card", SncfRouteCard);
@@ -330,12 +342,12 @@ window.customCards.push(
     type: "sncf-route-card",
     name: "SNCF Route Card",
     description: "Affiche les prochains trains et les perturbations sur un axe SNCF.",
-    preview: false,
+    preview: true,
   },
   {
     type: "sncf-specific-train-card",
     name: "SNCF Specific Train Card",
     description: "Affiche le statut en direct d'un numéro de train SNCF favori.",
-    preview: false,
+    preview: true,
   }
 );
