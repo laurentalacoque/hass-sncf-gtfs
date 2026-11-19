@@ -110,6 +110,7 @@ class SncfRouteCard extends HTMLElement {
             color: #ff9800;
             font-size: 0.85em;
             font-weight: 700;
+            display: none;
           }
           .arrow {
             opacity: 0.5;
