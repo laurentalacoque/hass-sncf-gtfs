@@ -1,4 +1,31 @@
 /* ==========================================================================
+   0. Functions to build official info URL for a given train
+   ========================================================================== */
+const SNCF_TRAIN_DETAIL_URL =
+  "https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/";
+
+function formatLocalDateFromTs(tsSeconds, fallbackIso) {
+  if (tsSeconds) {
+    const d = new Date(tsSeconds * 1000);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  if (fallbackIso && fallbackIso.length >= 10) {
+    return fallbackIso.slice(0, 10);
+  }
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function buildSncfTrainUrl(trainNumber, departureTs, fallbackIso) {
+  if (!trainNumber) return null;
+  const dateStr = formatLocalDateFromTs(departureTs, fallbackIso);
+  return `${SNCF_TRAIN_DETAIL_URL}?dateCirculation=${encodeURIComponent(dateStr)}&numeroCirculation=${encodeURIComponent(trainNumber)}`;
+}
+
+/* ==========================================================================
    1. WIDGET POUR UN AXE COMPLET (SncfRouteSensor) -> custom:sncf-route-card
    ========================================================================== */
 class SncfRouteCard extends HTMLElement {
@@ -97,10 +124,19 @@ class SncfRouteCard extends HTMLElement {
             margin-left: 6px;
           }
           .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             padding: 4px 10px;
             border-radius: 12px;
             font-size: 0.85em;
             font-weight: 500;
+            text-decoration: none;
+            transition: filter 0.15s ease, transform 0.1s ease;
+          }
+          a.badge:hover {
+            filter: brightness(1.18);
+            transform: translateY(-1px);
           }
           .status-ok { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
           .status-delay { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
@@ -114,7 +150,8 @@ class SncfRouteCard extends HTMLElement {
         </style>
       `;
       this.content = this.querySelector("#container");
-      this.querySelector("ha-card").addEventListener("click", () => {
+      this.querySelector("ha-card").addEventListener("click", (e) => {
+        if (e.target.closest("a.badge")) return;
         const event = new Event("hass-more-info", { bubbles: true, composed: true });
         event.detail = { entityId };
         this.dispatchEvent(event);
@@ -129,6 +166,7 @@ class SncfRouteCard extends HTMLElement {
     const title = this.config.title || stateObj.attributes.friendly_name || entityId;
     const trains = (stateObj.attributes.trains || []).slice(0, this.config.max_trains);
     const alerts = stateObj.attributes.alerts || [];
+    const downloadedAt = stateObj.attributes.downloaded_at;
 
     let html = `
       <div class="header">
@@ -175,6 +213,11 @@ class SncfRouteCard extends HTMLElement {
             ? `<span class="delay-inline">+${t.delay_minutes} min</span>`
             : "";
 
+        const trainUrl = buildSncfTrainUrl(t.train_number, t.departure_ts, downloadedAt);
+        const badgeHtml = trainUrl
+          ? `<a class="badge ${badgeClass}" href="${trainUrl}" target="_blank" rel="noopener noreferrer" title="Voir le détail du train n°${t.train_number} sur SNCF Voyageurs">${statusLabel} <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px;"></ha-icon></a>`
+          : `<span class="badge ${badgeClass}">${statusLabel}</span>`;
+
         html += `
           <div class="train-row ${index === 0 ? "next" : ""}">
             <div class="times">
@@ -184,7 +227,7 @@ class SncfRouteCard extends HTMLElement {
               <span>${arrDisplay}</span>
               <span class="train-num">n°${t.train_number}</span>
             </div>
-            <span class="badge ${badgeClass}">${statusLabel}</span>
+            ${badgeHtml}
           </div>
         `;
       });
@@ -278,12 +321,19 @@ class SncfSpecificTrainCard extends HTMLElement {
             margin-left: 4px;
           }
           .status-pill {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             padding: 2px 8px;
             border-radius: 10px;
             font-size: 0.8em;
             font-weight: 600;
             margin-top: 2px;
+            text-decoration: none;
+            transition: filter 0.15s ease;
+          }
+          a.status-pill:hover {
+            filter: brightness(1.18);
           }
           .alert-banner {
             margin-top: 10px;
@@ -308,7 +358,8 @@ class SncfSpecificTrainCard extends HTMLElement {
         </style>
       `;
       this.content = this.querySelector("#specific-container");
-      this.querySelector("ha-card").addEventListener("click", () => {
+      this.querySelector("ha-card").addEventListener("click", (e) => {
+        if (e.target.closest("a.status-pill")) return;
         const event = new Event("hass-more-info", { bubbles: true, composed: true });
         event.detail = { entityId };
         this.dispatchEvent(event);
@@ -353,6 +404,11 @@ class SncfSpecificTrainCard extends HTMLElement {
         ? `<span class="delay-inline">+${delayMin} min</span>`
         : "";
 
+    const trainUrl = buildSncfTrainUrl(trainNum, attrs.departure_ts, attrs.downloaded_at);
+    const pillHtml = trainUrl
+      ? `<a class="status-pill" href="${trainUrl}" target="_blank" rel="noopener noreferrer" title="Voir le détail du train n°${trainNum} sur SNCF Voyageurs">${statusText} <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 12px;"></ha-icon></a>`
+      : `<span class="status-pill">${statusText}</span>`;
+
     const alertHtml =
       alerts.length > 0
         ? `<div class="alert-banner">⚠️ <strong>${alerts[0].title}</strong></div>`
@@ -371,7 +427,7 @@ class SncfSpecificTrainCard extends HTMLElement {
         </div>
         <div class="right">
           <div class="dep-time">${isInactive ? "--:--" : schedDep}${delayInline}</div>
-          <span class="status-pill">${statusText}</span>
+          ${pillHtml}
         </div>
       </div>
       ${alertHtml}
