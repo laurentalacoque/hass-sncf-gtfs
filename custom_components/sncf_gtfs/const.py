@@ -3,6 +3,7 @@
 DOMAIN = "sncf_gtfs"
 
 GTFS_RT_URL = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates"
+GTFS_RT_ALERTS_URL = "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts"
 STATIONS_URL = "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/gares-de-voyageurs/exports/json"
 
 FRONTEND_SCRIPT_URL = "/sncf_gtfs_static/sncf-cards.js"

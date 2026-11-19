@@ -1,4 +1,5 @@
 """The SNCF GTFS-RT integration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CANCELED,
     DOMAIN,
+    GTFS_RT_ALERTS_URL,
     GTFS_RT_URL,
     SKIPPED,
     UPDATE_INTERVAL_MINUTES,
@@ -52,7 +54,7 @@ def extract_train_number(trip_id: str) -> str:
 
 
 class SncfGtfsCoordinator(DataUpdateCoordinator):
-    """Shared coordinator fetching and indexing the SNCF GTFS-RT feed."""
+    """Shared coordinator fetching and indexing the SNCF GTFS-RT feeds."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         super().__init__(
@@ -63,41 +65,74 @@ class SncfGtfsCoordinator(DataUpdateCoordinator):
         )
         self.session = async_get_clientsession(hass)
 
+    async def _fetch_bytes(self, url: str) -> bytes:
+        async with self.session.get(url, timeout=15) as resp:
+            resp.raise_for_status()
+            return await resp.read()
+
     async def _async_update_data(self) -> dict:
         try:
-            async with self.session.get(GTFS_RT_URL, timeout=15) as resp:
-                resp.raise_for_status()
-                raw_bytes = await resp.read()
+            trips_bytes, alerts_result = await asyncio.gather(
+                self._fetch_bytes(GTFS_RT_URL),
+                self._fetch_bytes(GTFS_RT_ALERTS_URL),
+                return_exceptions=True,
+            )
+            if isinstance(trips_bytes, Exception):
+                raise trips_bytes
+            alerts_bytes = alerts_result if isinstance(alerts_result, bytes) else None
         except Exception as err:
             raise UpdateFailed(f"Error fetching SNCF GTFS-RT feed: {err}") from err
 
-        return await self.hass.async_add_executor_job(self._parse_feed, raw_bytes)
+        return await self.hass.async_add_executor_job(
+            self._parse_feeds, trips_bytes, alerts_bytes
+        )
 
-    def _parse_feed(self, raw_bytes: bytes) -> dict:
-        feed = gtfs_realtime_pb2.FeedMessage()
-        feed.ParseFromString(raw_bytes)
+    def _extract_alert(self, alert, now_ts: float, alerts: list[dict]) -> None:
+        """Validate active period and extract targets and text from a GTFS-RT Alert."""
+        if alert.active_period:
+            is_active = any(
+                (not p.start or p.start <= now_ts) and (not p.end or p.end >= now_ts)
+                for p in alert.active_period
+            )
+            if not is_active:
+                return
 
+        trip_targets = []
+        route_targets = []
+        stop_targets = []
+        for ie in alert.informed_entity:
+            if ie.HasField("trip") and ie.trip.trip_id:
+                trip_targets.append(ie.trip.trip_id)
+            if ie.HasField("route_id") and ie.route_id:
+                route_targets.append(ie.route_id)
+            if ie.HasField("stop_id") and ie.stop_id:
+                stop_targets.append(ie.stop_id)
+
+        title = extract_translated_text(alert.header_text)
+        description = extract_translated_text(alert.description_text)
+        if not title and not description:
+            return
+
+        alerts.append({
+            "trip_ids": trip_targets,
+            "route_ids": route_targets,
+            "stop_ids": stop_targets,
+            "title": title or description,
+            "description": description,
+        })
+
+    def _parse_feeds(self, trips_bytes: bytes, alerts_bytes: bytes | None) -> dict:
         now_ts = time.time()
         trips = []
         alerts = []
 
-        for entity in feed.entity:
-            if entity.HasField("alert"):
-                alert = entity.alert
-                trip_targets = []
-                stop_targets = []
-                for ie in alert.informed_entity:
-                    if ie.HasField("trip") and ie.trip.trip_id:
-                        trip_targets.append(ie.trip.trip_id)
-                    if ie.HasField("stop_id") and ie.stop_id:
-                        stop_targets.append(ie.stop_id)
+        # 1. TripUpdates feed
+        trips_feed = gtfs_realtime_pb2.FeedMessage()
+        trips_feed.ParseFromString(trips_bytes)
 
-                alerts.append({
-                    "trip_ids": trip_targets,
-                    "stop_ids": stop_targets,
-                    "title": extract_translated_text(alert.header_text),
-                    "description": extract_translated_text(alert.description_text),
-                })
+        for entity in trips_feed.entity:
+            if entity.HasField("alert"):
+                self._extract_alert(entity.alert, now_ts, alerts)
                 continue
 
             if not entity.HasField("trip_update"):
@@ -105,6 +140,7 @@ class SncfGtfsCoordinator(DataUpdateCoordinator):
 
             tu = entity.trip_update
             trip_id = tu.trip.trip_id
+            route_id = tu.trip.route_id
             train_number = extract_train_number(trip_id)
             trip_canceled = tu.trip.schedule_relationship == CANCELED
 
@@ -126,15 +162,24 @@ class SncfGtfsCoordinator(DataUpdateCoordinator):
 
             trips.append({
                 "trip_id": trip_id,
+                "route_id": route_id,
                 "train_number": train_number,
                 "canceled": trip_canceled,
                 "stops": stops,
             })
 
+        # 2. ServiceAlerts feed
+        if alerts_bytes:
+            alerts_feed = gtfs_realtime_pb2.FeedMessage()
+            alerts_feed.ParseFromString(alerts_bytes)
+            for entity in alerts_feed.entity:
+                if entity.HasField("alert"):
+                    self._extract_alert(entity.alert, now_ts, alerts)
+
         downloaded_at = datetime.now().astimezone().isoformat()
         feed_timestamp = (
-            datetime.fromtimestamp(feed.header.timestamp).astimezone().isoformat()
-            if feed.header.timestamp
+            datetime.fromtimestamp(trips_feed.header.timestamp).astimezone().isoformat()
+            if trips_feed.header.timestamp
             else None
         )
 

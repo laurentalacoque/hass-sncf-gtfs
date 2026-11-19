@@ -51,6 +51,12 @@ class SncfRouteCard extends HTMLElement {
             margin-bottom: 12px;
             font-size: 0.9em;
           }
+          .alert-desc {
+            margin-top: 4px;
+            opacity: 0.85;
+            font-size: 0.92em;
+            line-height: 1.35;
+          }
           .train-row {
             display: flex;
             justify-content: space-between;
@@ -135,7 +141,17 @@ class SncfRouteCard extends HTMLElement {
     `;
 
     if (alerts.length > 0) {
-      html += `<div class="alert-box">⚠️ <strong>${alerts[0].title}</strong></div>`;
+      const extraCount = alerts.length > 1 ? ` (+${alerts.length - 1})` : "";
+      const desc =
+        alerts[0].description && alerts[0].description !== alerts[0].title
+          ? `<div class="alert-desc">${alerts[0].description}</div>`
+          : "";
+      html += `
+        <div class="alert-box">
+          ⚠️ <strong>${alerts[0].title}${extraCount}</strong>
+          ${desc}
+        </div>
+      `;
     }
 
     if (trains.length === 0) {
@@ -269,6 +285,14 @@ class SncfSpecificTrainCard extends HTMLElement {
             font-weight: 600;
             margin-top: 2px;
           }
+          .alert-banner {
+            margin-top: 10px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: rgba(255, 152, 0, 0.15);
+            border-left: 3px solid #ff9800;
+            font-size: 0.85em;
+          }
           /* Thèmes de couleurs selon état */
           .state-ok .icon-circle { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
           .state-ok .status-pill { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
@@ -303,6 +327,7 @@ class SncfSpecificTrainCard extends HTMLElement {
     const schedDep = attrs.scheduled_departure || depTime;
     const isCanceled = attrs.is_canceled === true;
     const delayMin = attrs.delay_minutes || 0;
+    const alerts = attrs.alerts || [];
     const isInactive = stateObj.state === "Inactive / Outside window";
 
     let stateClass = "state-ok";
@@ -328,6 +353,11 @@ class SncfSpecificTrainCard extends HTMLElement {
         ? `<span class="delay-inline">+${delayMin} min</span>`
         : "";
 
+    const alertHtml =
+      alerts.length > 0
+        ? `<div class="alert-banner">⚠️ <strong>${alerts[0].title}</strong></div>`
+        : "";
+
     this.content.innerHTML = `
       <div class="wrapper ${stateClass}">
         <div class="left">
@@ -344,6 +374,7 @@ class SncfSpecificTrainCard extends HTMLElement {
           <span class="status-pill">${statusText}</span>
         </div>
       </div>
+      ${alertHtml}
     `;
   }
 

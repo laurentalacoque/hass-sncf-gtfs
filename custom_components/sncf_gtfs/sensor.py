@@ -1,4 +1,5 @@
 """Sensor platform for SNCF GTFS-RT Tracker."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -94,25 +95,32 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
             else:
                 status = "On time"
 
-            
             est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
             sched_dep_ts = (dep_ts - target_stop["dep_delay"]) if (dep_ts and target_stop) else None
             sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep
 
-            # Find matching alerts
-            relevant_alerts = [
-                {"title": a["title"], "description": a["description"]}
-                for a in data["alerts"]
-                if trip["trip_id"] in a["trip_ids"]
-                or (self._origin_uic and any(s.endswith(self._origin_uic) for s in a["stop_ids"]))
-            ]
+            # Find matching alerts (trip, route or origin stop)
+            seen_titles = set()
+            relevant_alerts = []
+            for a in data["alerts"]:
+                matches_trip = trip["trip_id"] in a["trip_ids"]
+                matches_route = bool(trip.get("route_id")) and trip["route_id"] in a.get("route_ids", [])
+                matches_stop = bool(self._origin_uic) and any(
+                    s.endswith(self._origin_uic) for s in a["stop_ids"]
+                )
+                if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
+                    seen_titles.add(a["title"])
+                    relevant_alerts.append({
+                        "title": a["title"],
+                        "description": a["description"],
+                    })
 
             return {
                 "status": status,
                 "train_number": self._train_number,
                 "trip_id": trip["trip_id"],
-                "estimated_departure": est_dep,
                 "scheduled_departure": sched_dep,
+                "estimated_departure": est_dep,
                 "delay_minutes": delay_min,
                 "is_canceled": is_canceled,
                 "alerts": relevant_alerts,
@@ -134,14 +142,15 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
         return {
             "train_number": self._train_number,
             "origin_uic": self._origin_uic or None,
-            "estimated_departure": train.get("estimated_departure"),
             "scheduled_departure": train.get("scheduled_departure"),
+            "estimated_departure": train.get("estimated_departure"),
             "delay_minutes": train.get("delay_minutes", 0),
             "is_canceled": train.get("is_canceled", False),
             "alerts": train.get("alerts", []),
             "downloaded_at": data.get("downloaded_at"),
             "feed_timestamp": data.get("feed_timestamp"),
         }
+
 
 class SncfRouteSensor(CoordinatorEntity, SensorEntity):
     """Sensor displaying the next train departure time and listing all upcoming trains on a route."""
@@ -162,6 +171,7 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
         now_ts = data["now_ts"]
         matched_trains = []
         matched_trip_ids = set()
+        matched_route_ids = set()
 
         for trip in data["trips"]:
             idx_dep = None
@@ -195,8 +205,8 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
 
             est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
             sched_dep_ts = (dep_ts - stop_dep["dep_delay"]) if dep_ts else None
-            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep 
-            
+            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep
+
             arr_ts = stop_arr["arr_ts"] or stop_arr["dep_ts"]
             arr_delay = stop_arr.get("arr_delay", stop_dep["dep_delay"])
             est_arr = datetime.fromtimestamp(arr_ts).strftime("%H:%M") if arr_ts else None
@@ -204,6 +214,9 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             sched_arr = datetime.fromtimestamp(sched_arr_ts).strftime("%H:%M") if sched_arr_ts else est_arr
 
             matched_trip_ids.add(trip["trip_id"])
+            if trip.get("route_id"):
+                matched_route_ids.add(trip["route_id"])
+
             matched_trains.append({
                 "train_number": trip["train_number"],
                 "trip_id": trip["trip_id"],
@@ -219,15 +232,21 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
 
         matched_trains.sort(key=lambda t: t["departure_ts"] or float("inf"))
 
-        relevant_alerts = [
-            {"title": a["title"], "description": a["description"]}
-            for a in data["alerts"]
-            if any(tid in matched_trip_ids for tid in a["trip_ids"])
-            or any(
+        seen_titles = set()
+        relevant_alerts = []
+        for a in data["alerts"]:
+            matches_trip = any(tid in matched_trip_ids for tid in a["trip_ids"])
+            matches_route = any(rid in matched_route_ids for rid in a.get("route_ids", []))
+            matches_stop = any(
                 s.endswith(self._origin_uic) or s.endswith(self._destination_uic)
                 for s in a["stop_ids"]
             )
-        ]
+            if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
+                seen_titles.add(a["title"])
+                relevant_alerts.append({
+                    "title": a["title"],
+                    "description": a["description"],
+                })
 
         return matched_trains, relevant_alerts
 
@@ -252,9 +271,9 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             "origin_uic": self._origin_uic,
             "destination_uic": self._destination_uic,
             "next_train_number": next_train.get("train_number"),
-            "next_departure": next_train.get("estimated_departure"),
             "next_scheduled_departure": next_train.get("scheduled_departure"),
             "next_scheduled_arrival": next_train.get("scheduled_arrival"),
+            "next_departure": next_train.get("estimated_departure"),
             "next_arrival": next_train.get("estimated_arrival"),
             "next_status": next_train.get("status"),
             "trains": trains,
@@ -262,6 +281,7 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             "downloaded_at": data.get("downloaded_at"),
             "feed_timestamp": data.get("feed_timestamp"),
         }
+
 
 class SncfLastDownloadSensor(CoordinatorEntity, SensorEntity):
     """Global timestamp sensor showing when the GTFS-RT feed was last downloaded."""
