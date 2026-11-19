@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ajout d'un train ou d'un itinéraire",
+        "description": "Choisissez ce que vous voulez surveiller:",
+        "menu_options": {
+          "track_train": "Un train spécifique (ex: 17616)",
+          "track_route": "Un trajet direct Gare de départ -> arrivée"
+        }
+      },
+      "track_train": {
+        "title": "Surveillance d'un train",
+        "description": "Ajouter la référence du train",
+        "data": {
+          "train_number": "Identifiant du train (ex: 17616)",
+          "origin_uic": "Code UIC de gare de départ (optionnel)",
+          "name": "Nom (optionnel)"
+        }
+      },
+      "track_route": {
+        "title": "Trajet direct Départ -> Arrivée",
+        "description": "Recherchez les gares de départ et d'arrivée",
+        "data": {
+          "origin_uic": "Gare de départ",
+          "destination_uic": "Gare d'arrivée",
+          "also_add_roundtrip": "Ajouter le retour ?",
+          "name": "Nom (optionnel)"
+        }
+      }
+    },
+    "error": {
+      "same_station": "Les gares de départ et d'arrivée doivent être différents."
+    },
+    "abort": {
+      "already_configured": "Cet élément est déjà configuré"
+    }
+  }
+}

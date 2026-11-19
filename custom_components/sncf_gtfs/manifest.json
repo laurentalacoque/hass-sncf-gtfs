@@ -1,0 +1,12 @@
+{
+  "domain": "sncf_gtfs",
+  "name": "SNCF GTFS-RT",
+  "codeowners": ["@laurentalacoque"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http"],
+  "documentation": "https://github.com/laurentalacoque/hass-sncf-gtfs",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/laurentalacoque/hass-sncf-gtfs/issues",
+  "requirements": ["gtfs-realtime-bindings>=1.0.0", "protobuf>=4.21.0"],
+  "version": "1.0.0"
+}

@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add SNCF Tracking",
+        "description": "Choose what you want to monitor:",
+        "menu_options": {
+          "track_train": "A specific train number (e.g., 17616)",
+          "track_route": "An Origin -> Destination route"
+        }
+      },
+      "track_train": {
+        "title": "Track a specific train",
+        "description": "Enter the commercial train number and optionally select its departure station.",
+        "data": {
+          "train_number": "Train number (e.g., 17616)",
+          "origin_uic": "Departure station (optional)",
+          "name": "Sensor name (optional)"
+        }
+      },
+      "track_route": {
+        "title": "Track an Origin -> Destination route",
+        "description": "Search and select your departure and arrival stations.",
+        "data": {
+          "origin_uic": "Departure station",
+          "destination_uic": "Arrival station",
+          "also_add_roundtrip": "Add roundtrip?",
+          "name": "Sensor name (optional)"
+        }
+      }
+    },
+    "error": {
+      "same_station": "Departure and arrival stations must be different."
+    },
+    "abort": {
+      "already_configured": "This item is already configured."
+    }
+  }
+}
