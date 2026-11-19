@@ -29,7 +29,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
-FRONTEND_SCRIPT_URL = "/sncf_gtfs_static/sncf-cards.js"
+FRONTEND_SCRIPT_BASE_URL = "/sncf_gtfs_static/sncf-cards.js"
 
 
 def extract_translated_text(translated_string) -> str:
@@ -156,11 +156,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if js_path.exists():
             try:
                 await hass.http.async_register_static_paths([
-                    StaticPathConfig(FRONTEND_SCRIPT_URL, str(js_path), cache_headers=False)
+                    StaticPathConfig(FRONTEND_SCRIPT_BASE_URL, str(js_path), cache_headers=False)
                 ])
             except RuntimeError:
                 pass
-            add_extra_js_url(hass, FRONTEND_SCRIPT_URL)
+            version = int(js_path.stat().st_mtime)
+            add_extra_js_url(hass, f"{FRONTEND_SCRIPT_BASE_URL}?v={version}")
 
     # 2. Création SYNCHRONE d'un unique coordinateur partagé (avant tout await)
     if "coordinator" not in hass.data[DOMAIN]:
