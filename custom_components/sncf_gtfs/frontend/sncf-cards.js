@@ -319,6 +319,7 @@ class SncfSpecificTrainCard extends HTMLElement {
             font-size: 0.7em;
             font-weight: 700;
             margin-left: 4px;
+            display: none;
           }
           .status-pill {
             display: inline-flex;
