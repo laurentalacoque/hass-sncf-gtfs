@@ -1,6 +1,3 @@
-/* ==========================================================================
-   0. Functions to build official info URL for a given train
-   ========================================================================== */
 const SNCF_TRAIN_DETAIL_URL =
   "https://www.sncf-voyageurs.com/fr/voyagez-avec-nous/horaires-et-itineraires/recherche-de-train/detail-train/";
 
@@ -110,7 +107,6 @@ class SncfRouteCard extends HTMLElement {
             color: #ff9800;
             font-size: 0.85em;
             font-weight: 700;
-            display: none;
           }
           .arrow {
             opacity: 0.5;
@@ -142,6 +138,7 @@ class SncfRouteCard extends HTMLElement {
           .status-ok { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
           .status-delay { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
           .status-canceled { background: rgba(244, 67, 54, 0.2); color: #f44336; }
+          .status-scheduled { background: rgba(158, 158, 158, 0.18); color: var(--secondary-text-color, #9e9e9e); }
           .empty {
             text-align: center;
             opacity: 0.6;
@@ -194,11 +191,13 @@ class SncfRouteCard extends HTMLElement {
     }
 
     if (trains.length === 0) {
-      html += `<div class="empty">Aucun train à venir dans la fenêtre</div>`;
+      html += `<div class="empty">Aucun train à venir dans les 24h</div>`;
     } else {
       trains.forEach((t, index) => {
-        let badgeClass = "status-ok";
-        let statusLabel = "À l'heure";
+        const isRealtime = t.is_realtime !== false;
+        let badgeClass = isRealtime ? "status-ok" : "status-scheduled";
+        let statusLabel = isRealtime ? "À l'heure" : "Théorique";
+
         if (t.is_canceled) {
           badgeClass = "status-canceled";
           statusLabel = "Supprimé";
@@ -320,7 +319,6 @@ class SncfSpecificTrainCard extends HTMLElement {
             font-size: 0.7em;
             font-weight: 700;
             margin-left: 4px;
-            display: none;
           }
           .status-pill {
             display: inline-flex;
@@ -379,13 +377,14 @@ class SncfSpecificTrainCard extends HTMLElement {
     const depTime = attrs.estimated_departure || "--:--";
     const schedDep = attrs.scheduled_departure || depTime;
     const isCanceled = attrs.is_canceled === true;
+    const isRealtime = attrs.is_realtime !== false;
     const delayMin = attrs.delay_minutes || 0;
     const alerts = attrs.alerts || [];
     const isInactive = stateObj.state === "Inactive / Outside window";
 
-    let stateClass = "state-ok";
+    let stateClass = isRealtime ? "state-ok" : "state-inactive";
     let icon = "mdi:train-variant";
-    let statusText = "À l'heure";
+    let statusText = isRealtime ? "À l'heure" : "Théorique";
 
     if (isInactive) {
       stateClass = "state-inactive";
@@ -451,7 +450,6 @@ class SncfSpecificTrainCard extends HTMLElement {
 customElements.define("sncf-route-card", SncfRouteCard);
 customElements.define("sncf-specific-train-card", SncfSpecificTrainCard);
 
-// Déclaration officielle pour le sélecteur visuel "Ajouter une carte" de Lovelace
 window.customCards = window.customCards || [];
 window.customCards.push(
   {

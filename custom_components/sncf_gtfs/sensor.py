@@ -39,7 +39,6 @@ async def async_setup_entry(
     elif track_type == TRACK_TYPE_ROUTE:
         entities.append(SncfRouteSensor(coordinator, entry))
 
-    # Add the global download timestamp sensor once
     if not hass.data[DOMAIN].get("timestamp_sensor_added"):
         entities.append(SncfLastDownloadSensor(coordinator))
         hass.data[DOMAIN]["timestamp_sensor_added"] = True
@@ -64,12 +63,12 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
             return None
 
         now_ts = data["now_ts"]
+        candidates = []
 
         for trip in data["trips"]:
             if trip["train_number"] != self._train_number:
                 continue
 
-            # Find target stop (either specified origin_uic or first stop of the trip)
             target_stop = None
             if self._origin_uic:
                 target_stop = next(
@@ -82,51 +81,61 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
                 target_stop = trip["stops"][0]
 
             dep_ts = target_stop["dep_ts"] if target_stop else None
-            if dep_ts and dep_ts < (now_ts - DEPARTURE_MARGIN_SEC):
+            if not dep_ts or dep_ts < (now_ts - DEPARTURE_MARGIN_SEC):
                 continue
 
-            is_canceled = trip["canceled"] or (target_stop["skipped"] if target_stop else False)
-            delay_min = int((target_stop["dep_delay"] if target_stop else 0) // 60)
+            candidates.append((dep_ts, trip, target_stop))
 
-            if is_canceled:
-                status = "Canceled"
-            elif delay_min > 0:
-                status = f"Delayed (+{delay_min} min)"
-            else:
-                status = "On time"
+        if not candidates:
+            return None
 
-            est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
-            sched_dep_ts = (dep_ts - target_stop["dep_delay"]) if (dep_ts and target_stop) else None
-            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep
+        candidates.sort(key=lambda item: item[0])
+        dep_ts, trip, target_stop = candidates[0]
 
-            # Find matching alerts (trip, route or origin stop)
-            seen_titles = set()
-            relevant_alerts = []
-            for a in data["alerts"]:
-                matches_trip = trip["trip_id"] in a["trip_ids"]
-                matches_route = bool(trip.get("route_id")) and trip["route_id"] in a.get("route_ids", [])
-                matches_stop = bool(self._origin_uic) and any(
-                    s.endswith(self._origin_uic) for s in a["stop_ids"]
-                )
-                if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
-                    seen_titles.add(a["title"])
-                    relevant_alerts.append({
-                        "title": a["title"],
-                        "description": a["description"],
-                    })
+        is_realtime = bool(trip.get("is_realtime") or (target_stop and target_stop.get("is_realtime")))
+        is_canceled = trip["canceled"] or (target_stop["skipped"] if target_stop else False)
+        delay_min = int((target_stop["dep_delay"] if target_stop else 0) // 60)
 
-            return {
-                "status": status,
-                "train_number": self._train_number,
-                "trip_id": trip["trip_id"],
-                "scheduled_departure": sched_dep,
-                "estimated_departure": est_dep,
-                "delay_minutes": delay_min,
-                "is_canceled": is_canceled,
-                "alerts": relevant_alerts,
-            }
+        if is_canceled:
+            status = "Canceled"
+        elif delay_min > 0:
+            status = f"Delayed (+{delay_min} min)"
+        elif is_realtime:
+            status = "On time"
+        else:
+            status = "Scheduled"
 
-        return None
+        est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M")
+        sched_dep_ts = dep_ts - (target_stop["dep_delay"] if target_stop else 0)
+        sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M")
+
+        seen_titles = set()
+        relevant_alerts = []
+        for a in data["alerts"]:
+            matches_trip = trip["trip_id"] in a["trip_ids"]
+            matches_route = bool(trip.get("route_id")) and trip["route_id"] in a.get("route_ids", [])
+            matches_stop = bool(self._origin_uic) and any(
+                s.endswith(self._origin_uic) for s in a["stop_ids"]
+            )
+            if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
+                seen_titles.add(a["title"])
+                relevant_alerts.append({
+                    "title": a["title"],
+                    "description": a["description"],
+                })
+
+        return {
+            "status": status,
+            "train_number": self._train_number,
+            "trip_id": trip["trip_id"],
+            "departure_ts": dep_ts,
+            "scheduled_departure": sched_dep,
+            "estimated_departure": est_dep,
+            "delay_minutes": delay_min,
+            "is_canceled": is_canceled,
+            "is_realtime": is_realtime,
+            "alerts": relevant_alerts,
+        }
 
     @property
     def native_value(self) -> str:
@@ -142,10 +151,12 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
         return {
             "train_number": self._train_number,
             "origin_uic": self._origin_uic or None,
+            "departure_ts": train.get("departure_ts"),
             "scheduled_departure": train.get("scheduled_departure"),
             "estimated_departure": train.get("estimated_departure"),
             "delay_minutes": train.get("delay_minutes", 0),
             "is_canceled": train.get("is_canceled", False),
+            "is_realtime": train.get("is_realtime", False),
             "alerts": train.get("alerts", []),
             "downloaded_at": data.get("downloaded_at"),
             "feed_timestamp": data.get("feed_timestamp"),
@@ -190,9 +201,12 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 continue
 
             dep_ts = stop_dep["dep_ts"]
-            if dep_ts and dep_ts < (now_ts - DEPARTURE_MARGIN_SEC):
+            if not dep_ts or dep_ts < (now_ts - DEPARTURE_MARGIN_SEC):
                 continue
 
+            is_realtime = bool(
+                trip.get("is_realtime") or stop_dep.get("is_realtime") or stop_arr.get("is_realtime")
+            )
             is_canceled = trip["canceled"] or stop_dep["skipped"] or stop_arr["skipped"]
             delay_min = int(stop_dep["dep_delay"] // 60)
 
@@ -200,12 +214,14 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 status = "Canceled"
             elif delay_min > 0:
                 status = f"Delayed (+{delay_min} min)"
-            else:
+            elif is_realtime:
                 status = "On time"
+            else:
+                status = "Scheduled"
 
-            est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M") if dep_ts else None
-            sched_dep_ts = (dep_ts - stop_dep["dep_delay"]) if dep_ts else None
-            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M") if sched_dep_ts else est_dep
+            est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M")
+            sched_dep_ts = dep_ts - stop_dep["dep_delay"]
+            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M")
 
             arr_ts = stop_arr["arr_ts"] or stop_arr["dep_ts"]
             arr_delay = stop_arr.get("arr_delay", stop_dep["dep_delay"])
@@ -227,6 +243,7 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 "estimated_arrival": est_arr,
                 "delay_minutes": delay_min,
                 "is_canceled": is_canceled,
+                "is_realtime": is_realtime,
                 "status": status,
             })
 
