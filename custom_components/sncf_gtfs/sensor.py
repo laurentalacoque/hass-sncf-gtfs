@@ -6,9 +6,10 @@ from datetime import datetime
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_DESTINATION_UIC,
@@ -18,9 +19,31 @@ from .const import (
     CONF_TRAIN_NUMBER,
     DEPARTURE_MARGIN_SEC,
     DOMAIN,
+    MAX_STORED_TRAINS,
     TRACK_TYPE_ROUTE,
     TRACK_TYPE_TRAIN,
 )
+
+
+def _format_local_hhmm(ts: float | int | None) -> str | None:
+    """Format a POSIX timestamp as HH:MM in Home Assistant's local timezone."""
+    if ts is None:
+        return None
+    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("%H:%M")
+
+
+def _alert_matches_stop_only(alert: dict, target_uics: tuple[str, ...]) -> bool:
+    """Match stop-level alerts only when they are not scoped to specific trips or routes."""
+    if alert.get("trip_ids") or alert.get("route_ids"):
+        return False
+    valid_uics = [u for u in target_uics if u]
+    if not valid_uics:
+        return False
+    return any(
+        s.endswith(uic)
+        for s in alert.get("stop_ids", [])
+        for uic in valid_uics
+    )
 
 
 async def async_setup_entry(
@@ -39,15 +62,17 @@ async def async_setup_entry(
     elif track_type == TRACK_TYPE_ROUTE:
         entities.append(SncfRouteSensor(coordinator, entry))
 
-    if not hass.data[DOMAIN].get("timestamp_sensor_added"):
+    if not hass.data[DOMAIN].get("timestamp_sensor_entry_id"):
         entities.append(SncfLastDownloadSensor(coordinator))
-        hass.data[DOMAIN]["timestamp_sensor_added"] = True
+        hass.data[DOMAIN]["timestamp_sensor_entry_id"] = entry.entry_id
 
     async_add_entities(entities)
 
 
 class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
     """Sensor tracking a single train number."""
+
+    _unrecorded_attributes = frozenset({"alerts"})
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -56,8 +81,10 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = entry.data[CONF_NAME]
         self._attr_unique_id = f"{entry.entry_id}_train"
         self._attr_icon = "mdi:train-variant"
+        self._cached_train: dict | None = None
+        self._cache_populated = False
 
-    def _find_train(self) -> dict | None:
+    def _compute_train(self) -> dict | None:
         data = self.coordinator.data
         if not data:
             return None
@@ -92,9 +119,12 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
         candidates.sort(key=lambda item: item[0])
         dep_ts, trip, target_stop = candidates[0]
 
-        is_realtime = bool(trip.get("is_realtime") or (target_stop and target_stop.get("is_realtime")))
+        is_realtime = bool(
+            trip.get("is_realtime") or (target_stop and target_stop.get("is_realtime"))
+        )
         is_canceled = trip["canceled"] or (target_stop["skipped"] if target_stop else False)
-        delay_min = int((target_stop["dep_delay"] if target_stop else 0) // 60)
+        dep_delay_sec = target_stop["dep_delay"] if target_stop else 0
+        delay_min = int(dep_delay_sec / 60)
 
         if is_canceled:
             status = "Canceled"
@@ -105,18 +135,20 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
         else:
             status = "Scheduled"
 
-        est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M")
-        sched_dep_ts = dep_ts - (target_stop["dep_delay"] if target_stop else 0)
-        sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M")
+        est_dep = _format_local_hhmm(dep_ts)
+        sched_dep_ts = (
+            target_stop.get("sched_dep_ts")
+            if target_stop and target_stop.get("sched_dep_ts") is not None
+            else (dep_ts - dep_delay_sec)
+        )
+        sched_dep = _format_local_hhmm(sched_dep_ts)
 
         seen_titles = set()
         relevant_alerts = []
         for a in data["alerts"]:
             matches_trip = trip["trip_id"] in a["trip_ids"]
             matches_route = bool(trip.get("route_id")) and trip["route_id"] in a.get("route_ids", [])
-            matches_stop = bool(self._origin_uic) and any(
-                s.endswith(self._origin_uic) for s in a["stop_ids"]
-            )
+            matches_stop = _alert_matches_stop_only(a, (self._origin_uic,))
             if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
                 seen_titles.add(a["title"])
                 relevant_alerts.append({
@@ -137,9 +169,21 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
             "alerts": relevant_alerts,
         }
 
+    def _get_train(self) -> dict | None:
+        if not self._cache_populated:
+            self._cached_train = self._compute_train()
+            self._cache_populated = True
+        return self._cached_train
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._cached_train = self._compute_train()
+        self._cache_populated = True
+        self.async_write_ha_state()
+
     @property
     def native_value(self) -> str:
-        train = self._find_train()
+        train = self._get_train()
         if not train:
             return "Inactive / Outside window"
         return train["status"]
@@ -147,7 +191,7 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
-        train = self._find_train() or {}
+        train = self._get_train() or {}
         return {
             "train_number": self._train_number,
             "origin_uic": self._origin_uic or None,
@@ -164,7 +208,9 @@ class SncfSpecificTrainSensor(CoordinatorEntity, SensorEntity):
 
 
 class SncfRouteSensor(CoordinatorEntity, SensorEntity):
-    """Sensor displaying the next train departure time and listing all upcoming trains on a route."""
+    """Sensor displaying the next train departure time and listing upcoming trains on a route."""
+
+    _unrecorded_attributes = frozenset({"trains", "alerts"})
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -173,8 +219,10 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = entry.data[CONF_NAME]
         self._attr_unique_id = f"{entry.entry_id}_route"
         self._attr_icon = "mdi:train"
+        self._cached_route_data: tuple[list[dict], list[dict]] = ([], [])
+        self._cache_populated = False
 
-    def _get_route_data(self) -> tuple[list[dict], list[dict]]:
+    def _compute_route_data(self) -> tuple[list[dict], list[dict]]:
         data = self.coordinator.data
         if not data:
             return [], []
@@ -205,10 +253,13 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 continue
 
             is_realtime = bool(
-                trip.get("is_realtime") or stop_dep.get("is_realtime") or stop_arr.get("is_realtime")
+                trip.get("is_realtime")
+                or stop_dep.get("is_realtime")
+                or stop_arr.get("is_realtime")
             )
             is_canceled = trip["canceled"] or stop_dep["skipped"] or stop_arr["skipped"]
-            delay_min = int(stop_dep["dep_delay"] // 60)
+            dep_delay_sec = stop_dep["dep_delay"]
+            delay_min = int(dep_delay_sec / 60)
 
             if is_canceled:
                 status = "Canceled"
@@ -219,15 +270,26 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             else:
                 status = "Scheduled"
 
-            est_dep = datetime.fromtimestamp(dep_ts).strftime("%H:%M")
-            sched_dep_ts = dep_ts - stop_dep["dep_delay"]
-            sched_dep = datetime.fromtimestamp(sched_dep_ts).strftime("%H:%M")
+            est_dep = _format_local_hhmm(dep_ts)
+            sched_dep_ts = (
+                stop_dep.get("sched_dep_ts")
+                if stop_dep.get("sched_dep_ts") is not None
+                else (dep_ts - dep_delay_sec)
+            )
+            sched_dep = _format_local_hhmm(sched_dep_ts)
 
             arr_ts = stop_arr["arr_ts"] or stop_arr["dep_ts"]
-            arr_delay = stop_arr.get("arr_delay", stop_dep["dep_delay"])
-            est_arr = datetime.fromtimestamp(arr_ts).strftime("%H:%M") if arr_ts else None
-            sched_arr_ts = (arr_ts - arr_delay) if arr_ts else None
-            sched_arr = datetime.fromtimestamp(sched_arr_ts).strftime("%H:%M") if sched_arr_ts else est_arr
+            arr_delay = stop_arr.get("arr_delay", dep_delay_sec)
+            est_arr = _format_local_hhmm(arr_ts) if arr_ts else None
+            if stop_arr.get("sched_arr_ts") is not None:
+                sched_arr_ts = stop_arr["sched_arr_ts"]
+            elif stop_arr.get("sched_dep_ts") is not None:
+                sched_arr_ts = stop_arr["sched_dep_ts"]
+            elif arr_ts is not None:
+                sched_arr_ts = arr_ts - arr_delay
+            else:
+                sched_arr_ts = None
+            sched_arr = _format_local_hhmm(sched_arr_ts) if sched_arr_ts else est_arr
 
             matched_trip_ids.add(trip["trip_id"])
             if trip.get("route_id"):
@@ -254,9 +316,8 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
         for a in data["alerts"]:
             matches_trip = any(tid in matched_trip_ids for tid in a["trip_ids"])
             matches_route = any(rid in matched_route_ids for rid in a.get("route_ids", []))
-            matches_stop = any(
-                s.endswith(self._origin_uic) or s.endswith(self._destination_uic)
-                for s in a["stop_ids"]
+            matches_stop = _alert_matches_stop_only(
+                a, (self._origin_uic, self._destination_uic)
             )
             if (matches_trip or matches_route or matches_stop) and a["title"] not in seen_titles:
                 seen_titles.add(a["title"])
@@ -266,6 +327,18 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
                 })
 
         return matched_trains, relevant_alerts
+
+    def _get_route_data(self) -> tuple[list[dict], list[dict]]:
+        if not self._cache_populated:
+            self._cached_route_data = self._compute_route_data()
+            self._cache_populated = True
+        return self._cached_route_data
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._cached_route_data = self._compute_route_data()
+        self._cache_populated = True
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> str:
@@ -293,7 +366,7 @@ class SncfRouteSensor(CoordinatorEntity, SensorEntity):
             "next_departure": next_train.get("estimated_departure"),
             "next_arrival": next_train.get("estimated_arrival"),
             "next_status": next_train.get("status"),
-            "trains": trains,
+            "trains": trains[:MAX_STORED_TRAINS],
             "alerts": alerts,
             "downloaded_at": data.get("downloaded_at"),
             "feed_timestamp": data.get("feed_timestamp"),
@@ -304,7 +377,7 @@ class SncfLastDownloadSensor(CoordinatorEntity, SensorEntity):
     """Global timestamp sensor showing when the GTFS-RT feed was last downloaded."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_name = "SNCF Dernier Téléchargement"
+    _attr_name = "SNCF Last Download"
     _attr_unique_id = "sncf_gtfs_last_download"
     _attr_icon = "mdi:clock-check-outline"
 
@@ -312,7 +385,7 @@ class SncfLastDownloadSensor(CoordinatorEntity, SensorEntity):
     def native_value(self) -> datetime | None:
         data = self.coordinator.data or {}
         iso_str = data.get("downloaded_at")
-        return datetime.fromisoformat(iso_str) if iso_str else None
+        return dt_util.parse_datetime(iso_str) if iso_str else None
 
     @property
     def extra_state_attributes(self) -> dict:

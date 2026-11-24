@@ -30,7 +30,8 @@
       }
     },
     "error": {
-      "same_station": "Departure and arrival stations must be different."
+      "same_station": "Departure and arrival stations must be different.",
+      "invalid_train_number": "Please enter a valid train number."
     },
     "abort": {
       "already_configured": "This item is already configured."
