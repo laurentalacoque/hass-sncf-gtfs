@@ -1,6 +1,7 @@
 {
   "domain": "sncf_gtfs",
   "name": "SNCF GTFS-RT",
+  "categories": ["local_services", "vehicles_transport.public_transport"],
   "codeowners": ["@laurentalacoque"],
   "config_flow": true,
   "dependencies": ["frontend", "http"],
