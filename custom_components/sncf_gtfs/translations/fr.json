@@ -30,7 +30,8 @@
       }
     },
     "error": {
-      "same_station": "Les gares de départ et d'arrivée doivent être différents."
+      "same_station": "Les gares de départ et d'arrivée doivent être différentes.",
+      "invalid_train_number": "Veuillez saisir un numéro de train valide."
     },
     "abort": {
       "already_configured": "Cet élément est déjà configuré"

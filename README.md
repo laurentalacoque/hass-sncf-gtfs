@@ -12,8 +12,8 @@ Custom Home Assistant integration to track real-time SNCF train schedules (TER, 
 
 ## Installation
 
-1. In Home Assistant, go to **Settings > Marketplace**.
-2. Open the menu in the top right corner (**⋮**) and select **Custom repositories** (or add `https://github.com/laurentalacoque/hass-sncf-gtfs` as an **Integration**).
+1. In Home Assistant, open **HACS**.
+2. Open the menu in the top right corner (**⋮**) and select **Custom repositories**, then add `https://github.com/laurentalacoque/hass-sncf-gtfs` as an **Integration**.
 3. Search for **SNCF GTFS-RT**, click **Download / Install**, and restart Home Assistant.
 
 ## Configuration

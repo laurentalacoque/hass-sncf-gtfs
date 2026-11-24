@@ -1,8 +1,11 @@
 """Config flow for SNCF GTFS-RT Tracker integration."""
+
 from __future__ import annotations
 
 import logging
 from typing import Any
+
+import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, SOURCE_IMPORT
@@ -28,6 +31,21 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+STATIONS_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+FALLBACK_STATIONS: dict[str, str] = {
+    "87686006": "Paris Gare de Lyon",
+    "87271007": "Paris Gare du Nord",
+    "87391003": "Paris Montparnasse",
+    "87723197": "Lyon Part Dieu",
+    "87751008": "Marseille Saint-Charles",
+    "87581009": "Bordeaux Saint-Jean",
+    "87286005": "Lille Flandres",
+    "87212027": "Strasbourg",
+    "87481002": "Nantes",
+    "87611004": "Toulouse Matabiau",
+    "87747006": "Grenoble",
+}
 
 
 class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -44,7 +62,7 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         if not self._stations_map:
             session = async_get_clientsession(self.hass)
             try:
-                async with session.get(STATIONS_URL, timeout=15) as resp:
+                async with session.get(STATIONS_URL, timeout=STATIONS_TIMEOUT) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
 
@@ -56,11 +74,7 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
                         self._stations_map[uic] = name
             except Exception as err:
                 _LOGGER.warning("Unable to load SNCF stations list: %s", err)
-                self._stations_map = {
-                    "87747006": "Grenoble",
-                    "87723395": "La Verpillière",
-                    "87723197": "Lyon Part Dieu",
-                }
+                self._stations_map = dict(FALLBACK_STATIONS)
 
         sorted_stations = sorted(self._stations_map.items(), key=lambda x: x[1])
         return [
@@ -96,28 +110,37 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         station_options = await self._async_load_stations()
 
         if user_input is not None:
-            train_num = user_input[CONF_TRAIN_NUMBER].strip()
-            origin_uic = user_input.get(CONF_ORIGIN_UIC, "").strip()
-            origin_name = self._stations_map.get(origin_uic, origin_uic)
+            train_num = (user_input.get(CONF_TRAIN_NUMBER) or "").strip()
+            origin_uic = (user_input.get(CONF_ORIGIN_UIC) or "").strip()
 
-            default_title = (
-                f"Train {train_num} ({origin_name})" if origin_name else f"Train SNCF {train_num}"
-            )
-            name = user_input.get(CONF_NAME, "").strip() or default_title
+            if not train_num:
+                errors[CONF_TRAIN_NUMBER] = "invalid_train_number"
+            else:
+                origin_name = self._stations_map.get(origin_uic, origin_uic)
+                default_title = (
+                    f"Train {train_num} ({origin_name})"
+                    if origin_name
+                    else f"Train SNCF {train_num}"
+                )
+                name = (user_input.get(CONF_NAME) or "").strip() or default_title
 
-            unique_id = f"train_{train_num}_{origin_uic}" if origin_uic else f"train_{train_num}"
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
+                unique_id = (
+                    f"train_{train_num}_{origin_uic}"
+                    if origin_uic
+                    else f"train_{train_num}"
+                )
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
 
-            return self.async_create_entry(
-                title=name,
-                data={
-                    CONF_TRACK_TYPE: TRACK_TYPE_TRAIN,
-                    CONF_NAME: name,
-                    CONF_TRAIN_NUMBER: train_num,
-                    CONF_ORIGIN_UIC: origin_uic,
-                },
-            )
+                return self.async_create_entry(
+                    title=name,
+                    data={
+                        CONF_TRACK_TYPE: TRACK_TYPE_TRAIN,
+                        CONF_NAME: name,
+                        CONF_TRAIN_NUMBER: train_num,
+                        CONF_ORIGIN_UIC: origin_uic,
+                    },
+                )
 
         schema = vol.Schema(
             {
@@ -131,7 +154,9 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_NAME, default=""): str,
             }
         )
-        return self.async_show_form(step_id="track_train", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="track_train", data_schema=schema, errors=errors
+        )
 
     async def async_step_track_route(
         self, user_input: dict[str, Any] | None = None
@@ -141,14 +166,14 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         station_options = await self._async_load_stations()
 
         if user_input is not None:
-            origin = user_input[CONF_ORIGIN_UIC].strip()
-            destination = user_input[CONF_DESTINATION_UIC].strip()
-            add_roundtrip = user_input.get(CONF_ADD_ROUNDTRIP, False)
+            origin = (user_input.get(CONF_ORIGIN_UIC) or "").strip()
+            destination = (user_input.get(CONF_DESTINATION_UIC) or "").strip()
+            add_roundtrip = bool(user_input.get(CONF_ADD_ROUNDTRIP, False))
 
             origin_name = self._stations_map.get(origin, origin)
             dest_name = self._stations_map.get(destination, destination)
             default_title = f"{origin_name} -> {dest_name}"
-            name = user_input.get(CONF_NAME, "").strip() or default_title
+            name = (user_input.get(CONF_NAME) or "").strip() or default_title
 
             if origin == destination:
                 errors["base"] = "same_station"
@@ -185,13 +210,13 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_ORIGIN_UIC, default="87747006"): SelectSelector(
+                vol.Required(CONF_ORIGIN_UIC): SelectSelector(
                     SelectSelectorConfig(
                         options=station_options,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Required(CONF_DESTINATION_UIC, default="87723395"): SelectSelector(
+                vol.Required(CONF_DESTINATION_UIC): SelectSelector(
                     SelectSelectorConfig(
                         options=station_options,
                         mode=SelectSelectorMode.DROPDOWN,
@@ -201,4 +226,6 @@ class SncfGtfsConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_NAME, default=""): str,
             }
         )
-        return self.async_show_form(step_id="track_route", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="track_route", data_schema=schema, errors=errors
+        )
